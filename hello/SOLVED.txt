@@ -1,0 +1,61 @@
+## Explicação da Implementação: Função de Tamanho de Memória BIOS (e Correções)
+
+Este documento explica a implementação de uma nova função para obter o tamanho da memória convencional usando um serviço da BIOS, chamá-la a partir de C, e aborda os erros de ligação e de tempo de execução encontrados.
+
+### 1. Modificações em `libc.S`
+
+* **Nova Função `get_conventional_memory_kb`**:
+    * Uma nova função global `get_conventional_memory_kb` foi adicionada.
+    * A diretiva `.global get_conventional_memory_kb` exporta o símbolo.
+    * **Chamada BIOS**: O núcleo desta função é a instrução `int $0x12`. Esta é uma interrupção da BIOS usada para determinar a quantidade de memória convencional.
+    * **Valor de Retorno**: O serviço `int 0x12` da BIOS retorna o tamanho da memória em Kilobytes diretamente no registo `%ax`. Como o GCC espera valores de retorno inteiros em `%ax`, nenhuma instrução `mov` adicional é necessária.
+
+* **Função `printf`**:
+    * Permaneceu inalterada. Espera um ponteiro para uma string terminada em nulo no registo `%cx`. Imprime caracteres usando `int $0x10` (saída teletype da BIOS).
+
+### 2. Modificações em `main.c`
+
+* **Declaração de Funções Assembly**:
+    * `extern unsigned int get_conventional_memory_kb(void);`
+    * `extern void printf(void);` (Apenas para o linker reconhecer o símbolo `printf` de `libc.S`. Não é chamada como uma função C padrão.)
+
+* **Wrapper `asm_printf` para Chamada Correta**:
+    * O principal problema de tempo de execução era que a função `printf` em assembly esperava o seu argumento (ponteiro da string) no registo `%cx`, enquanto a chamada C padrão passaria argumentos pela pilha.
+    * **Solução**: Uma função `static inline void asm_printf(const char *s)` foi criada em `main.c`. Esta função usa inline assembly (`__asm__ __volatile__`).
+        * Para resolver o erro "operand type mismatch for `mov`" (e anteriormente "invalid instruction suffix for `mov`"), a abordagem de passar o argumento foi alterada. Em vez de usar uma instrução `mov` explícita dentro do bloco de assembly, a constraint de operando de entrada `"c"(s)` é usada.
+        * A constraint `"c"(s)` instrui o GCC a garantir que o valor do ponteiro `s` esteja no registo `CX` (ou `ECX` para 32 bits, mas `CX` será usado em modo 16 bits para o ponteiro) *antes* que o código assembly dentro do bloco seja executado.
+        * Portanto, a instrução `mov %0, %%cx` foi removida do bloco assembly, pois `s` já estará em `CX`.
+        * O bloco assembly agora contém apenas `call printf`.
+    * Os registos clobber (`%ax`, `%bx`, `%si`, `memory`, `cc`) permanecem, pois são modificados pela função `printf` em assembly.
+    * Todas as chamadas diretas a `printf` em `main` foram substituídas por chamadas a `asm_printf`.
+
+* **Função `utoa` (Unsigned Integer para ASCII)**:
+    * Uma função `utoa` foi implementada para converter o tamanho da memória `unsigned int` numa string para que `asm_printf` possa imprimi-la.
+
+* **Chamada da Nova Função e Impressão**:
+    * `get_conventional_memory_kb()` é chamada, o seu resultado é convertido para string usando `utoa`, e depois impresso usando as chamadas corrigidas a `asm_printf`.
+
+* **Loop Infinito no Final de `main`**:
+    * Adicionado `while(1);` no final de `main`. Em ambientes "bare-metal", retornar de `main` pode levar a comportamento indefinido.
+
+### 3. Modificações no `Makefile` e Correções de Erros de Ligação
+
+Vários erros de ligação foram encontrados e corrigidos anteriormente:
+
+* **`linker script file 'hello.ld' appears multiple times`**:
+    * **Correção**: `hello.ld` foi tornado um pré-requisito "order-only" na regra `hello.bin`.
+
+* **`referência não definida para "__stack_chk_fail"`**:
+    * **Correção**: A proteção de pilha foi desativada adicionando a flag `-fno-stack-protector` ao comando de compilação para `main.c`.
+
+* **`múltiplas definições de "_start"`**:
+    * **Correção**: O `crt0.o` foi removido da lista explícita de ficheiros objeto passados ao linker na linha de comando do `gcc` para `hello.bin`, assumindo que `hello.ld` já é responsável por incluir o conteúdo de `crt0.o`.
+
+### Como Compilar e Executar
+
+1.  Garanta que todos os ficheiros (`main.c`, `libc.S`, `crt0.S`, `hello.ld`, `Makefile`, `bintools.mk`) estão no mesmo diretório.
+2.  Execute `make` no terminal. Isto irá produzir `hello.bin`.
+3.  Execute `hello.bin` num ambiente de 16 bits ou emulador adequado (ex: QEMU, DOSBox).
+
+A saída esperada deve ser:
+Hello World!Conventional Memory (KB): (onde `<valor>` é o tamanho da memória reportado pela BIOS).

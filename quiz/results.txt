@@ -1,0 +1,95 @@
+p1
+
+The address of the main function changes with each execution because of a modern security feature
+called Address Space Layout Randomization (ASLR). The operating system intentionally loads the
+program into a different, random memory location every time it runs. This behavior is not an error
+but a defense mechanism that makes it significantly harder for attackers to predict the location of 
+functions, thereby preventing common security exploits like buffer overflow attacks.
+
+
+
+p2
+
+The user_key array is allocated to hold only 10 bytes, but the scanf("%s", user_key) function doesn't
+check the length of the input. When you enter a string longer than 9 characters (plus one for the null 
+terminator), like youshallnotpass, the extra characters are written past the end of the user_key buffer, 
+overflowing onto adjacent areas of the stack.
+
+Because of how local variables are typically arranged on the stack, the int verified variable is located
+right next to the char user_key buffer. By providing a long string, you overwrite the initial 0 value of 
+verified with non-zero character data from your input. Consequently, the if (!verified) check fails, and 
+the program incorrectly grants you access even though you provided the wrong password.
+
+A much safer and more robust approach is to use fgets, which allows you to specify the maximum number of 
+characters to read, preventing an overflow.
+
+
+
+p3
+
+a) How does foo pass the parameter to bar?
+
+The caller, foo, calculates the parameter value (n+1) and places it into the %eax register. It then pushes this value onto the stack (push %eax) immediately before executing the call <bar> instruction. This is defined by the calling convention, which is a set of rules governing how functions call each other. These rules, including parameter passing, return values, and stack management, are part of a platform's Application Binary Interface (ABI), ensuring that code compiled by different compilers can interoperate.
+
+b) How does bar return its result to foo?
+
+The function bar places its return value into the %eax register just before it returns (mov -0x4(%ebp),%eax). The caller, foo, then retrieves the result from the %eax register after bar has finished. This is also dictated by the cdecl calling convention within the x86 ABI, which specifies that integer-type return values are passed back to the caller through the %eax register.
+
+c) What is the purpose of the first two and the second-to-last instructions in foo?
+
+The first two instructions (push %ebp and mov %esp,%ebp) constitute the function prologue. They save the previous function's stack frame pointer (%ebp) and establish a new one for foo. The second-to-last instruction, leave, is the function epilogue. It reverses the prologue's work by restoring the caller's stack frame, preparing the stack for the ret instruction. This stack frame management is a fundamental part of the ABI.
+
+d) What is the purpose of the third line in foo and bar, and is it the same as in main?
+
+In foo (sub $0x18,%esp) and bar (sub $0x10,%esp), this instruction allocates space on the stack for local variables. The purpose is different from the third line in main (and $0xfffffff0,%esp). The instruction in main aligns the stack pointer to a 16-byte boundary. The x86 ABI requires this alignment for performance reasons, particularly for certain instruction sets (like SSE) that operate on 16-byte data.
+
+e) What happens if bar's return type is changed to char?
+
+If bar returns a char, the compiler knows the meaningful data is only the lowest byte in the %eax register. When foo retrieves this value to store it in its int a variable, the compiler will insert an instruction to sign-extend the 8-bit char into a 32-bit int (e.g., movsbl %al, %eax). This ensures the value is correctly represented as an integer. The declarations of foo and bar are useful because they inform the compiler of the exact function signatures, allowing it to generate the correct code for passing parameters and handling return values according to the ABI. Without them, the compiler might make incorrect assumptions, leading to bugs.
+
+
+
+p4 
+
+a) Execution Results
+All three programs (p4-v1, p4-v2, and p4-v3), when executed, will produce the exact same output:
+
+Foo
+This is because all three versions are built from the same source code, which calls the foo() function. The linking method changes how the code for foo() is included in the final program, but it doesn't change the program's logic or what it does at runtime.
+
+b) Program Size Comparison
+There will be a noticeable difference in the file sizes of the executables.
+
+p4-v1 (explicit objects) and p4-v2 (static library) will have nearly identical and larger file sizes. When linking, the linker copies the necessary code from the object file (foo.o) directly into the final executable. A static library (.a) is essentially just an archive of object files, and the linker treats it the same way—it finds the required object inside the archive and copies its contents into the program.
+
+p4-v3 (dynamic library) will be significantly smaller. This is because the code for foo() is not copied into the executable. Instead, the linker only adds a small reference (a stub) indicating that the function foo() is located in the shared library libp4.so and needs to be loaded at runtime.
+
+c) Symbol Inspection with nm
+The nm command reveals how the symbols are resolved.
+
+p4-v1 and p4-v2: In these executables, nm will list the symbol foo with the type T. The T indicates that the symbol is defined within the program's own text (code) section. The symbol bar will not be listed at all because it was never called and therefore never linked into the program.
+
+p4-v3: In this version, nm will list foo with the type U. The U means the symbol is undefined; the program requires this symbol, but its code is not present. This tells the system that the symbol must be resolved at runtime from a shared library.
+
+d) Library Information with readelf
+The readelf -d command shows the program's dynamic linking requirements.
+
+p4-v1 and p4-v2: These programs will have no dynamic entries related to libp4. Since the library code was copied in at compile time, there is no need for the system to load any custom libraries at runtime.
+
+p4-v3: The output for this program will contain a (NEEDED) entry listing libp4.so as a Shared library dependency. When the kernel loads p4-v3 to run, it reads this information. It then instructs the dynamic loader (ld.so) to find libp4.so, load it into memory, and resolve the undefined symbol foo by mapping the library's code into the process's address space.
+
+e) Pros and Cons of Static vs. Dynamic Libraries
+a) Installing the program on other hosts:
+Static: Pro. The executable is completely self-contained. You can copy it to another compatible host, and it will run without needing any separate library files.
+
+Dynamic: Con. You must ensure that the correct version of the dynamic library (.so file) is also installed on the other host in a location where the system can find it. This can lead to dependency issues.
+
+b) The library is updated (e.g., for a security fix):
+Static:  Con. The library code is baked into the executable. To get the update, you must recompile and relink your program. Old, potentially vulnerable, versions will persist in the wild until they are rebuilt.
+
+Dynamic:  Pro. You can simply replace the single .so file on the system. All programs that use it will automatically load the new version the next time they are run, without needing to be recompiled.
+
+c) The library is used by many different programs on the same host:
+Static: Con. Every program gets its own copy of the library's code. This wastes disk space and, more importantly, RAM, as the same code is loaded into memory multiple times for each running program.
+
+Dynamic:  Pro. All programs link to the same .so file. The operating system loads the library into physical memory only once and shares it among all programs that need it, saving significant disk space and RAM.
